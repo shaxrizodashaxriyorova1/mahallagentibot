@@ -454,7 +454,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             # HuggingFace AI API orqali javob olish
             if ai_client:
                 completion = ai_client.chat.completions.create(
-                    model="deepseek-ai/DeepSeek-R1:novita",
+                    model="MiniMaxAI/MiniMax-M2.5:fireworks-ai",
                     messages=[
                         {
                             "role": "system",
