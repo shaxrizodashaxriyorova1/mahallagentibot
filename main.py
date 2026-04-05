@@ -438,75 +438,46 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_text = message.text.strip()
     
     # ==================== AI YORDAMCHI ====================
-    if context.user_data.get('ai_mode'):
-        if user_text.lower() == '/cancel':
-            context.user_data['ai_mode'] = False
-            await message.reply_text(
-                "🤖 AI yordamchi rejimi bekor qilindi.\n"
-                "🏦 Asosiy menyu uchun /start ni bosing."
-            )
-            return
-        
-        # "O'ylayapman..." xabarini yuborish
-        thinking_msg = await message.reply_text("🤔 *O'ylayapman...*", parse_mode=ParseMode.MARKDOWN)
-        
-        try:
-            # HuggingFace AI API orqali javob olish
-            if ai_client:
-                completion = ai_client.chat.completions.create(
-                    model="MiniMaxAI/MiniMax-M2.5:fireworks-ai",
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": """Siz O'zbekiston banklari, kreditlar, depozitlar va moliyaviy masalalar bo'yicha mutaxassis yordamchisiz. 
-                            Quyidagi banklar haqida ma'lumotingiz bor: Hamkorbank, Xalq Banki, TBC Bank, Turonbank, NBU, SQB.
-                            Faqat bank va moliyaviy savollarga javob bering. Iloji boricha foydali, qisqa va aniq javoblar bering.
-                            Agar savol banklarga tegishli bo'lmasa, faqat bank masalalari bo'yicha yordam bera olishingizni ayting."""
-                        },
-                        {
-                            "role": "user",
-                            "content": user_text
-                        }
-                    ],
-                    max_tokens=500
-                )
-                
-                response = completion.choices[0].message.content
-                
-                # Javobni formatlash
-                if response:
-                    await thinking_msg.edit_text(
-                        f"🤖 *AI Yordamchi:*\n\n{response}", 
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                else:
-                    await thinking_msg.edit_text(
-                        "❌ Kechirasiz, AI dan javob olishda muammo yuz berdi.\n\n"
-                        "Iltimos, savolingizni boshqacha usulda yozib ko'ring."
-                    )
-            else:
-                await thinking_msg.edit_text(
-                    "❌ *AI yordamchi ishlamayapti!*\n\n"
-                    "Sababi: API kaliti to'g'ri sozlanmagan.\n\n"
-                    "🔧 Muammoni hal qilish:\n"
-                    "1. .env fayliga HF_API_KEY qo'shing\n"
-                    "2. Yoki keyinroq urinib ko'ring\n\n"
-                    "🏦 Bank ma'lumotlari uchun /start ni bosing.",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-                
-        except Exception as e:
-            logger.error(f"AI xatolik: {e}")
-            await thinking_msg.edit_text(
-                f"❌ *AI xizmatida xatolik:*\n\n"
-                f"Xato: {str(e)[:100]}\n\n"
-                "Iltimos, keyinroq qayta urinib ko'ring yoki /start ni bosing.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-        
-        # AI rejimidan chiqish (faqat bitta so'rov uchun)
+    # ==================== AI YORDAMCHI ====================
+if context.user_data.get('ai_mode'):
+    if user_text.lower() == '/cancel':
         context.user_data['ai_mode'] = False
+        await message.reply_text("🤖 AI yordamchi rejimi bekor qilindi.\n🏦 Asosiy menyu: /start")
         return
+    
+    thinking_msg = await message.reply_text("🤔 *O‘ylayapman...*", parse_mode=ParseMode.MARKDOWN)
+    
+    try:
+        # other.py dagi kopya – to‘liq Novita API orqali
+        completion = ai_client.chat.completions.create(
+            model="deepseek-ai/DeepSeek-R1:novita",  # :novita muhim!
+            messages=[
+                {
+                    "role": "user",
+                    "content": user_text
+                }
+            ],
+            max_tokens=500
+        )
+        response = completion.choices[0].message.content
+        
+        # Javobni yuborish
+        await thinking_msg.edit_text(
+            f"🤖 *AI Yordamchi:*\n\n{response}", 
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+    except Exception as e:
+        logger.error(f"AI xatolik (Novita): {e}")
+        await thinking_msg.edit_text(
+            f"❌ *AI xizmatida xatolik:*\n\n"
+            f"Xato: {str(e)[:150]}\n\n"
+            f"💡 *Maslahat:* Iltimos, keyinroq qayta urinib ko‘ring yoki /start ni bosing.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    context.user_data['ai_mode'] = False
+    return
     
     # ==================== KREDIT KALKULYATORI ====================
     if context.user_data.get('calc_type') == 'loan':
