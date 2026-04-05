@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, 
-    ContextTypes, MessageHandler, filters, ConversationHandler
+    ContextTypes, MessageHandler, filters
 )
 from telegram.constants import ParseMode
 
@@ -143,11 +143,6 @@ EXCHANGE_RATES: Dict[str, float] = {
     "GBP": 16300.0,
     "CNY": 1780.0
 }
-
-# Conversation handler states
-(LOAN_AMOUNT, LOAN_RATE, LOAN_TERM, 
- DEPOSIT_AMOUNT, DEPOSIT_RATE, DEPOSIT_TERM,
- CURRENCY_AMOUNT, UZS_AMOUNT) = range(8)
 
 # ==================== YORDAMCHI FUNKSIYALAR ====================
 def format_bank_info(bank_key: str) -> str:
@@ -313,6 +308,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
     
     elif data == "calc_loan":
+        context.user_data['calc_type'] = 'loan'
+        context.user_data['step'] = 'loan_amount'
         await query.edit_message_text(
             "💰 *Kredit kalkulyatori* 💰\n\n"
             "Iltimos, kredit summasini so'mda kiriting:\n"
@@ -320,9 +317,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "❌ Bekor qilish: /cancel",
             parse_mode=ParseMode.MARKDOWN
         )
-        return LOAN_AMOUNT
     
     elif data == "calc_deposit":
+        context.user_data['calc_type'] = 'deposit'
+        context.user_data['step'] = 'deposit_amount'
         await query.edit_message_text(
             "💵 *Depozit kalkulyatori* 💵\n\n"
             "Iltimos, depozit summasini so'mda kiriting:\n"
@@ -330,7 +328,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "❌ Bekor qilish: /cancel",
             parse_mode=ParseMode.MARKDOWN
         )
-        return DEPOSIT_AMOUNT
     
     elif data == "currency":
         keyboard = []
@@ -352,6 +349,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     elif data.startswith("curr_") and data != "curr_reverse":
         currency = data.replace("curr_", "")
         context.user_data['currency_from'] = currency
+        context.user_data['step'] = 'currency_amount'
         await query.edit_message_text(
             f"💱 {currency} → UZS konvertatsiyasi\n\n"
             f"1 {currency} = {EXCHANGE_RATES[currency]:,.0f} so'm\n\n"
@@ -360,9 +358,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"❌ Bekor qilish: /cancel",
             parse_mode=ParseMode.MARKDOWN
         )
-        context.user_data['step'] = 'currency_amount'
     
     elif data == "curr_reverse":
+        context.user_data['step'] = 'uzs_amount'
         await query.edit_message_text(
             "💱 UZS → Valyuta konvertatsiyasi\n\n"
             "Qancha so'm konvertatsiya qilmoqchisiz?\n"
@@ -370,7 +368,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "❌ Bekor qilish: /cancel",
             parse_mode=ParseMode.MARKDOWN
         )
-        context.user_data['step'] = 'uzs_amount'
     
     elif data == "ai_assistant":
         if ai_client:
@@ -391,9 +388,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "❌ *AI yordamchi hozircha ishlamayapti!*\n\n"
                 "Sabablari:\n"
                 "• API kaliti noto'g'ri\n"
-                "• Internet aloqasi yo'q\n"
-                "• HuggingFace serverida muammo\n\n"
-                "🔧 Tez orada ishga tushiriladi.\n\n"
+                "• Internet aloqasi yo'q\n\n"
                 "Shu vaqtda bank ma'lumotlaridan foydalaning: /start",
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -404,7 +399,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 📌 *Versiya:* 2.0.0
 👨‍💻 *Muallif:* Mahalla Agentlik jamoasi
-📅 *Oxirgi yangilanish:* 2026 yil
 
 ✨ *Funksiyalar:*
 • 6 ta bank bo'yicha batafsil ma'lumot
@@ -415,8 +409,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 • Banklar taqqoslash
 
 💡 *Maslahat:* Botdan to'liq foydalanish uchun /start ni bosing.
-
-📞 *Yordam:* @mahalla_agenti_support
 """
         keyboard = [[InlineKeyboardButton("🔙 Asosiy menyu", callback_data="back_to_main")]]
         await query.edit_message_text(
@@ -438,46 +430,48 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_text = message.text.strip()
     
     # ==================== AI YORDAMCHI ====================
-    # ==================== AI YORDAMCHI ====================
-if context.user_data.get('ai_mode'):
-    if user_text.lower() == '/cancel':
+    if context.user_data.get('ai_mode'):
+        if user_text.lower() == '/cancel':
+            context.user_data['ai_mode'] = False
+            await message.reply_text("🤖 AI yordamchi rejimi bekor qilindi.\n🏦 Asosiy menyu: /start")
+            return
+        
+        thinking_msg = await message.reply_text("🤔 *O‘ylayapman...*", parse_mode=ParseMode.MARKDOWN)
+        
+        try:
+            # Novita API orqali so'rov
+            completion = ai_client.chat.completions.create(
+                model="deepseek-ai/DeepSeek-R1:novita",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Siz O'zbekiston banklari, kreditlar, depozitlar va moliyaviy masalalar bo'yicha mutaxassis yordamchisiz."
+                    },
+                    {
+                        "role": "user",
+                        "content": user_text
+                    }
+                ],
+                max_tokens=500
+            )
+            response = completion.choices[0].message.content
+            
+            await thinking_msg.edit_text(
+                f"🤖 *AI Yordamchi:*\n\n{response}", 
+                parse_mode=ParseMode.MARKDOWN
+            )
+            
+        except Exception as e:
+            logger.error(f"AI xatolik (Novita): {e}")
+            await thinking_msg.edit_text(
+                f"❌ *AI xizmatida xatolik:*\n\n"
+                f"Xato: {str(e)[:150]}\n\n"
+                f"💡 Iltimos, keyinroq qayta urinib ko‘ring.",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        
         context.user_data['ai_mode'] = False
-        await message.reply_text("🤖 AI yordamchi rejimi bekor qilindi.\n🏦 Asosiy menyu: /start")
         return
-    
-    thinking_msg = await message.reply_text("🤔 *O‘ylayapman...*", parse_mode=ParseMode.MARKDOWN)
-    
-    try:
-        # other.py dagi kopya – to‘liq Novita API orqali
-        completion = ai_client.chat.completions.create(
-            model="deepseek-ai/DeepSeek-R1:novita",  # :novita muhim!
-            messages=[
-                {
-                    "role": "user",
-                    "content": user_text
-                }
-            ],
-            max_tokens=500
-        )
-        response = completion.choices[0].message.content
-        
-        # Javobni yuborish
-        await thinking_msg.edit_text(
-            f"🤖 *AI Yordamchi:*\n\n{response}", 
-            parse_mode=ParseMode.MARKDOWN
-        )
-        
-    except Exception as e:
-        logger.error(f"AI xatolik (Novita): {e}")
-        await thinking_msg.edit_text(
-            f"❌ *AI xizmatida xatolik:*\n\n"
-            f"Xato: {str(e)[:150]}\n\n"
-            f"💡 *Maslahat:* Iltimos, keyinroq qayta urinib ko‘ring yoki /start ni bosing.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    context.user_data['ai_mode'] = False
-    return
     
     # ==================== KREDIT KALKULYATORI ====================
     if context.user_data.get('calc_type') == 'loan':
@@ -493,12 +487,12 @@ if context.user_data.get('ai_mode'):
                 await message.reply_text(
                     f"💰 Kredit summasi: {amount:,.0f} so'm\n\n"
                     f"📈 Endi yillik foiz stavkasini kiriting (%):\n"
-                    f"Masalan: `24` (banklar stavkalari 22-40% oralig'ida)\n\n"
+                    f"Masalan: `24`\n\n"
                     f"❌ Bekor qilish: /cancel",
                     parse_mode=ParseMode.MARKDOWN
                 )
             except ValueError:
-                await message.reply_text("❌ Iltimos, to'g'ri summa kiriting (faqat raqamlar). Masalan: `25000000`")
+                await message.reply_text("❌ Iltimos, to'g'ri summa kiriting. Masalan: `25000000`")
         
         elif step == 'loan_rate':
             try:
@@ -510,12 +504,12 @@ if context.user_data.get('ai_mode'):
                 await message.reply_text(
                     f"📈 Yillik foiz stavkasi: {rate}%\n\n"
                     f"⏱️ Endi kredit muddatini oylarda kiriting:\n"
-                    f"Masalan: `12`, `24`, `36`, `60` (maksimal 84 oy)\n\n"
+                    f"Masalan: `12`, `24`, `36`, `60`\n\n"
                     f"❌ Bekor qilish: /cancel",
                     parse_mode=ParseMode.MARKDOWN
                 )
             except ValueError:
-                await message.reply_text("❌ Iltimos, to'g'ri foiz stavkasi kiriting (1-60 oralig'ida). Masalan: `24`")
+                await message.reply_text("❌ Iltimos, to'g'ri foiz stavkasi kiriting (1-60 oralig'ida).")
         
         elif step == 'loan_term':
             try:
@@ -526,13 +520,11 @@ if context.user_data.get('ai_mode'):
                 amount = context.user_data['loan_amount']
                 rate = context.user_data['loan_rate']
                 
-                # Oylik to'lovni hisoblash
                 monthly_rate = rate / 100 / 12
                 payment = amount * (monthly_rate * (1 + monthly_rate) ** months) / ((1 + monthly_rate) ** months - 1)
                 total_payment = payment * months
                 total_interest = total_payment - amount
                 
-                # Kredit jadvali
                 schedule_img = generate_loan_schedule(amount, rate, months)
                 
                 result_text = f"""
@@ -547,8 +539,6 @@ if context.user_data.get('ai_mode'):
 • Oylik to'lov: {payment:,.0f} so'm
 • Jami to'lov: {total_payment:,.0f} so'm
 • Jami foiz: {total_interest:,.0f} so'm
-
-📈 *Tavsiya:* Eng past foizli banklar - Hamkorbank (~22%) va Xalq Banki (~22-26%)
 """
                 
                 if schedule_img:
@@ -560,10 +550,7 @@ if context.user_data.get('ai_mode'):
                 else:
                     await message.reply_text(result_text, parse_mode=ParseMode.MARKDOWN)
                 
-                # Tozalash
                 context.user_data.clear()
-                
-                # Asosiy menyu
                 await message.reply_text(
                     "👇 *Asosiy menyu:*",
                     reply_markup=get_main_menu_keyboard(),
@@ -571,7 +558,7 @@ if context.user_data.get('ai_mode'):
                 )
                 
             except ValueError:
-                await message.reply_text("❌ Iltimos, to'g'ri muddat kiriting (1-120 oy oralig'ida). Masalan: `24`")
+                await message.reply_text("❌ Iltimos, to'g'ri muddat kiriting (1-120 oy).")
     
     # ==================== DEPOZIT KALKULYATORI ====================
     elif context.user_data.get('calc_type') == 'deposit':
@@ -587,7 +574,7 @@ if context.user_data.get('ai_mode'):
                 await message.reply_text(
                     f"💵 Depozit summasi: {amount:,.0f} so'm\n\n"
                     f"📈 Endi yillik foiz stavkasini kiriting (%):\n"
-                    f"Masalan: `18` (banklar stavkalari 17-23% oralig'ida)\n\n"
+                    f"Masalan: `18`\n\n"
                     f"❌ Bekor qilish: /cancel",
                     parse_mode=ParseMode.MARKDOWN
                 )
@@ -604,7 +591,7 @@ if context.user_data.get('ai_mode'):
                 await message.reply_text(
                     f"📈 Yillik foiz stavkasi: {rate}%\n\n"
                     f"⏱️ Endi depozit muddatini oylarda kiriting:\n"
-                    f"Masalan: `6`, `12`, `24` (maksimal 60 oy)\n\n"
+                    f"Masalan: `6`, `12`, `24`\n\n"
                     f"❌ Bekor qilish: /cancel",
                     parse_mode=ParseMode.MARKDOWN
                 )
@@ -620,7 +607,6 @@ if context.user_data.get('ai_mode'):
                 amount = context.user_data['deposit_amount']
                 rate = context.user_data['deposit_rate']
                 
-                # Depozit hisobi
                 total_interest = amount * (rate / 100) * (months / 12)
                 total_amount = amount + total_interest
                 
@@ -635,19 +621,11 @@ if context.user_data.get('ai_mode'):
 💰 *Natijalar:*
 • Qo'shimcha foiz: {total_interest:,.0f} so'm
 • Jami summa: {total_amount:,.0f} so'm
-
-📈 *Eng yaxshi depozit takliflari:*
-• Xalq Banki: 17-21%
-• Hamkorbank: 18-22%
-• NBU: 17-20%
 """
                 
                 await message.reply_text(result_text, parse_mode=ParseMode.MARKDOWN)
                 
-                # Tozalash
                 context.user_data.clear()
-                
-                # Asosiy menyu
                 await message.reply_text(
                     "👇 *Asosiy menyu:*",
                     reply_markup=get_main_menu_keyboard(),
@@ -655,7 +633,7 @@ if context.user_data.get('ai_mode'):
                 )
                 
             except ValueError:
-                await message.reply_text("❌ Iltimos, to'g'ri muddat kiriting (1-60 oy oralig'ida).")
+                await message.reply_text("❌ Iltimos, to'g'ri muddat kiriting (1-60 oy).")
     
     # ==================== VALYUTA KONVERTORI ====================
     elif context.user_data.get('step') == 'currency_amount':
@@ -673,8 +651,6 @@ if context.user_data.get('ai_mode'):
 {amount:,.2f} {currency} = {converted:,.0f} so'm
 
 📊 *Kurs:* 1 {currency} = {EXCHANGE_RATES[currency]:,.0f} so'm
-
-💡 *Maslahat:* Boshqa konvertatsiya uchun /start ni bosing.
 """
             await message.reply_text(result_text, parse_mode=ParseMode.MARKDOWN)
             
@@ -686,7 +662,7 @@ if context.user_data.get('ai_mode'):
             )
             
         except ValueError:
-            await message.reply_text("❌ Iltimos, to'g'ri miqdor kiriting (faqat raqamlar). Masalan: `100`")
+            await message.reply_text("❌ Iltimos, to'g'ri miqdor kiriting. Masalan: `100`")
     
     elif context.user_data.get('step') == 'uzs_amount':
         try:
@@ -705,10 +681,6 @@ if context.user_data.get('ai_mode'):
 {amount:,.0f} so'm = 
 
 {chr(10).join(results)}
-
-📊 *Joriy kurslar bo'yicha*
-
-💡 *Maslahat:* Boshqa konvertatsiya uchun /start ni bosing.
 """
             await message.reply_text(result_text, parse_mode=ParseMode.MARKDOWN)
             
@@ -720,46 +692,15 @@ if context.user_data.get('ai_mode'):
             )
             
         except ValueError:
-            await message.reply_text("❌ Iltimos, to'g'ri miqdor kiriting (faqat raqamlar). Masalan: `1000000`")
+            await message.reply_text("❌ Iltimos, to'g'ri miqdor kiriting. Masalan: `1000000`")
     
     else:
         await message.reply_text(
             "❓ *Tushunarsiz buyruq* ❓\n\n"
-            "Yordam uchun quyidagi buyruqlardan foydalaning:\n"
-            "• /start - Asosiy menyu\n"
-            "• /cancel - Joriy amalni bekor qilish\n\n"
-            "👇 Asosiy menyu:",
+            "Yordam uchun /start ni bosing.",
             reply_markup=get_main_menu_keyboard(),
             parse_mode=ParseMode.MARKDOWN
         )
-
-async def loan_conversation_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Kredit hisoblashni boshlash"""
-    query = update.callback_query
-    await query.answer()
-    context.user_data['calc_type'] = 'loan'
-    context.user_data['step'] = 'loan_amount'
-    await query.edit_message_text(
-        "💰 *Kredit kalkulyatori* 💰\n\n"
-        "Iltimos, kredit summasini so'mda kiriting:\n"
-        "Masalan: `25000000`\n\n"
-        "❌ Bekor qilish: /cancel",
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def deposit_conversation_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Depozit hisoblashni boshlash"""
-    query = update.callback_query
-    await query.answer()
-    context.user_data['calc_type'] = 'deposit'
-    context.user_data['step'] = 'deposit_amount'
-    await query.edit_message_text(
-        "💵 *Depozit kalkulyatori* 💵\n\n"
-        "Iltimos, depozit summasini so'mda kiriting:\n"
-        "Masalan: `10000000`\n\n"
-        "❌ Bekor qilish: /cancel",
-        parse_mode=ParseMode.MARKDOWN
-    )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/cancel komandasi - joriy amalni bekor qilish"""
@@ -776,11 +717,10 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Xatoliklarni qayta ishlash"""
     logger.error(f"Xatolik yuz berdi: {context.error}")
     
-    error_message = "❌ *Kechirasiz, texnik xatolik yuz berdi!* ❌\n\n"
-    
     if update and update.effective_message:
         await update.effective_message.reply_text(
-            error_message + "Iltimos, keyinroq qayta urinib ko'ring yoki /start ni bosing.",
+            "❌ *Kechirasiz, texnik xatolik yuz berdi!* ❌\n\n"
+            "Iltimos, /start ni bosing va qayta urinib ko'ring.",
             parse_mode=ParseMode.MARKDOWN
         )
 
@@ -793,17 +733,14 @@ def main() -> None:
     print(f"🤖 AI Client: {'✅ Ishga tushdi' if ai_client else '❌ Ishlamayapti'}")
     print("=" * 50)
     
-    # Application yaratish
     application = Application.builder().token(TOKEN).build()
     
-    # Handlerlarni qo'shish
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("cancel", cancel))
     application.add_handler(CallbackQueryHandler(button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_error_handler(error_handler)
     
-    # Botni ishga tushirish
     print("✅ Bot muvaffaqiyatli ishga tushdi!")
     print("🏃 Bot ishlayapti...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
