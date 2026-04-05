@@ -1,114 +1,153 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Mahalla Agenti Telegram Bot
+Muallif: Mahalla Agentlik jamoasi
+Versiya: 2.0.0
+"""
 
 import os
 import logging
-import asyncio
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
+import sys
 from datetime import datetime, timedelta
 from io import BytesIO
+from typing import Dict, Any, Optional
+
+# Matplotlib backend sozlamasi (xatoliklarni oldini olish uchun)
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler, 
+    ContextTypes, MessageHandler, filters, ConversationHandler
+)
 from telegram.constants import ParseMode
 
 from huggingface_hub import InferenceClient
+from dotenv import load_dotenv
 
+# ==================== LOAD ENVIRONMENT ====================
+load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 HF_API_KEY = os.getenv("HF_API_KEY")
-ai_client = InferenceClient(api_key=HF_API_KEY)
 
-# Logging sozlamalari
+# Token tekshiruvi
+if not TOKEN:
+    print("❌ XATO: BOT_TOKEN topilmadi! Iltimos, .env fayl yarating va tokeningizni qo'shing.")
+    print("📝 .env fayl mazmuni:")
+    print("BOT_TOKEN=your_telegram_bot_token_here")
+    print("HF_API_KEY=your_huggingface_api_key_here")
+    sys.exit(1)
+
+# ==================== KONFIGURATSIYA ====================
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.INFO,
+    handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
 
+# AI Client ni ishga tushirish
+try:
+    ai_client = InferenceClient(api_key=HF_API_KEY)
+    logger.info("✅ AI Client muvaffaqiyatli ishga tushdi")
+except Exception as e:
+    logger.error(f"❌ AI Client ishga tushmadi: {e}")
+    ai_client = None
+
 # ==================== BANK MA'LUMOTLARI ====================
-# Banklar haqida batafsil ma'lumot [citation:1][citation:5][citation:10]
-BANKS = {
+BANKS: Dict[str, Dict[str, str]] = {
     "hamkorbank": {
-        "name": "🏦 Hamkorbank",
+        "name": "Hamkorbank",
         "color": "🟢",
-        "credit_rate": "Yillik 22% - 28%",
-        "deposit_rate": "Yillik 18% - 22%",
+        "credit_rate": "22% - 28%",
+        "deposit_rate": "18% - 22%",
         "loan_term": "60 oygacha",
-        "max_amount": "100 mln so'mgacha",
+        "max_amount": "100 mln so'm",
         "description": "O'zbekistonning yetakchi banklaridan biri. Tez va qulay kreditlash shartlari.",
-        "requirements": "✅ Pasport + ID-karta\n✅ Daromad ma'lumotnomasi\n✅ 18 yoshdan katta"
+        "requirements": "✅ Pasport + ID-karta\n✅ Daromad ma'lumotnomasi\n✅ 18 yoshdan katta",
+        "phone": "+998 78 120 31 31",
+        "website": "https://hamkorbank.uz"
     },
     "xalq_banki": {
-        "name": "🏛️ Xalq Banki",
+        "name": "Xalq Banki",
         "color": "🔵",
-        "credit_rate": "Yillik 22% - 26%",
-        "deposit_rate": "Yillik 17% - 21%",
+        "credit_rate": "22% - 26%",
+        "deposit_rate": "17% - 21%",
         "loan_term": "84 oygacha",
-        "max_amount": "500 mln so'mgacha",
+        "max_amount": "500 mln so'm",
         "description": "Keng filial tarmog'iga ega, aholiga qulay xizmat ko'rsatadi.",
-        "requirements": "✅ Pasport\n✅ Daromad ma'lumotnomasi\n✅ Kafillar (katta summalar uchun)"
+        "requirements": "✅ Pasport\n✅ Daromad ma'lumotnomasi\n✅ Kafillar (katta summalar uchun)",
+        "phone": "+998 71 200 60 00",
+        "website": "https://xalqbanki.uz"
     },
     "tbc_bank": {
-        "name": "🟠 TBC Bank",
+        "name": "TBC Bank",
         "color": "🟠",
-        "credit_rate": "Yillik 24% - 40.5%",
-        "deposit_rate": "Yillik 19% - 23%",
+        "credit_rate": "24% - 40.5%",
+        "deposit_rate": "19% - 23%",
         "loan_term": "48 oygacha",
-        "max_amount": "50 mln so'mgacha",
+        "max_amount": "50 mln so'm",
         "description": "Raqamli bank xizmatlari bilan tanilgan. Mikrokreditlar bo'yicha tezkor.",
-        "requirements": "✅ Pasport\n✅ Mobil ilova orqali onlayn ariza"
+        "requirements": "✅ Pasport\n✅ Mobil ilova orqali onlayn ariza",
+        "phone": "+998 78 113 33 00",
+        "website": "https://tbcbank.uz"
     },
     "turonbank": {
-        "name": "🟡 Turonbank",
+        "name": "Turonbank",
         "color": "🟡",
-        "credit_rate": "Yillik 22% - 27%",
-        "deposit_rate": "Yillik 18% - 22%",
+        "credit_rate": "22% - 27%",
+        "deposit_rate": "18% - 22%",
         "loan_term": "60 oygacha",
-        "max_amount": "200 mln so'mgacha",
+        "max_amount": "200 mln so'm",
         "description": "Biznes va iste'mol kreditlari bo'yicha qulay shartlar.",
-        "requirements": "✅ Pasport\n✅ Daromad ma'lumotnomasi\n✅ Bandlik tasdiqnomasi"
+        "requirements": "✅ Pasport\n✅ Daromad ma'lumotnomasi\n✅ Bandlik tasdiqnomasi",
+        "phone": "+998 71 202 00 00",
+        "website": "https://turonbank.uz"
     },
     "nbu": {
-        "name": "🏦 NBU (Milliy Bank)",
+        "name": "NBU (Milliy Bank)",
         "color": "🏛️",
-        "credit_rate": "Yillik 24% - 28%",
-        "deposit_rate": "Yillik 17% - 20%",
+        "credit_rate": "24% - 28%",
+        "deposit_rate": "17% - 20%",
         "loan_term": "60 oygacha",
-        "max_amount": "100 mln so'mgacha",
+        "max_amount": "100 mln so'm",
         "description": "Davlat banki, ishonchli va barqaror. Mikrokreditlar bo'yicha qulay.",
-        "requirements": "✅ Pasport/ID-karta\n✅ Daromad ma'lumotnomasi\n✅ Sug'urta polisi [citation:1]"
+        "requirements": "✅ Pasport/ID-karta\n✅ Daromad ma'lumotnomasi\n✅ Sug'urta polisi",
+        "phone": "+998 71 236 45 45",
+        "website": "https://nbu.uz"
     },
     "sqb": {
-        "name": "🔴 SQB (Savdogar)",
+        "name": "SQB (Savdogar)",
         "color": "🔴",
-        "credit_rate": "Yillik 23% - 28%",
-        "deposit_rate": "Yillik 18% - 22%",
+        "credit_rate": "23% - 28%",
+        "deposit_rate": "18% - 22%",
         "loan_term": "60 oygacha",
-        "max_amount": "150 mln so'mgacha",
+        "max_amount": "150 mln so'm",
         "description": "Tadbirkorlar va jismoniy shaxslar uchun keng imkoniyatlar.",
-        "requirements": "✅ Pasport\n✅ Daromad ma'lumotnomasi\n✅ 2 yillik ish staji"
+        "requirements": "✅ Pasport\n✅ Daromad ma'lumotnomasi\n✅ 2 yillik ish staji",
+        "phone": "+998 71 200 66 00",
+        "website": "https://sqb.uz"
     }
 }
 
-# Valyuta kurslari (so'mga nisbatan - taxminiy, real API dan olish tavsiya etiladi)
-EXCHANGE_RATES = {
-    "USD": 12900,
-    "EUR": 14000,
-    "RUB": 140,
-    "GBP": 16300,
-    "CNY": 1780
+# Valyuta kurslari
+EXCHANGE_RATES: Dict[str, float] = {
+    "USD": 12900.0,
+    "EUR": 14000.0,
+    "RUB": 140.0,
+    "GBP": 16300.0,
+    "CNY": 1780.0
 }
 
-# ==================== KALIT SO'ZLAR ====================
-MAIN_MENU_BUTTONS = {
-    "banklar": "🏦 BANKLAR",
-    "taqqoslash": "📊 TAQQOSLASH",
-    "kredit": "💰 KREDIT HISOBI",
-    "depozit": "💵 DEPOZIT HISOBI",
-    "valyuta": "💱 VALYUTA KONVERTOR",
-    "ai": "🤖 AI YORDAMCHI",
-    "about": "ℹ️ BOT HAQIDA"
-}
+# Conversation handler states
+(LOAN_AMOUNT, LOAN_RATE, LOAN_TERM, 
+ DEPOSIT_AMOUNT, DEPOSIT_RATE, DEPOSIT_TERM,
+ CURRENCY_AMOUNT, UZS_AMOUNT) = range(8)
 
 # ==================== YORDAMCHI FUNKSIYALAR ====================
 def format_bank_info(bank_key: str) -> str:
@@ -130,97 +169,75 @@ def format_bank_info(bank_key: str) -> str:
 📄 *Talab qilinadigan hujjatlar:*
 {bank['requirements']}
 
-🔍 *Qo'shimcha ma'lumot:* /start ni bosing va menyudan tanlang
+📞 *Aloqa:* {bank['phone']}
+🌐 *Veb-sayt:* {bank['website']}
 """
 
-def generate_loan_schedule(amount: float, rate: float, months: int) -> BytesIO:
+def generate_loan_schedule(amount: float, rate: float, months: int) -> Optional[BytesIO]:
     """Kredit jadvalini yaratib, rasm sifatida qaytaradi"""
-    monthly_rate = rate / 100 / 12
-    payment = amount * (monthly_rate * (1 + monthly_rate) ** months) / ((1 + monthly_rate) ** months - 1)
-    
-    # Ma'lumotlarni tayyorlash
-    dates = []
-    remaining = []
-    remaining_amount = amount
-    schedule_dates = []
-    
-    for i in range(months):
-        interest = remaining_amount * monthly_rate
-        principal = payment - interest
-        remaining_amount -= principal
-        dates.append(i + 1)
-        remaining.append(remaining_amount if remaining_amount > 0 else 0)
-        schedule_dates.append(datetime.now() + timedelta(days=30 * (i + 1)))
-    
-    # Grafik yaratish
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), facecolor='white')
-    
-    # Asosiy qarzning kamayishi
-    ax1.plot(dates, remaining, 'b-', linewidth=2, color='#2E86AB')
-    ax1.fill_between(dates, 0, remaining, alpha=0.3, color='#2E86AB')
-    ax1.set_xlabel('Oy', fontsize=12)
-    ax1.set_ylabel('Qolgan qarz (so\'m)', fontsize=12)
-    ax1.set_title(f'Kredit qoldig\'i dinamikasi\n{months} oy, {rate}%', fontsize=14, fontweight='bold')
-    ax1.grid(True, alpha=0.3)
-    
-    # Oylik to'lov diagrammasi
-    interest_part = payment * 0.4
-    principal_part = payment * 0.6
-    ax2.bar(['Foiz', 'Asosiy qarz'], [interest_part, principal_part], color=['#E63946', '#2E86AB'])
-    ax2.set_ylabel('So\'m', fontsize=12)
-    ax2.set_title(f'Oylik to\'lov tarkibi\nJami: {payment:,.0f} so\'m', fontsize=14, fontweight='bold')
-    
-    plt.tight_layout()
-    
-    # Rasmni bytes ga o'tkazish
-    buf = BytesIO()
-    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-    buf.seek(0)
-    plt.close()
-    
-    return buf
+    try:
+        monthly_rate = rate / 100 / 12
+        payment = amount * (monthly_rate * (1 + monthly_rate) ** months) / ((1 + monthly_rate) ** months - 1)
+        
+        dates = []
+        remaining = []
+        remaining_amount = amount
+        
+        for i in range(months):
+            interest = remaining_amount * monthly_rate
+            principal = payment - interest
+            remaining_amount -= principal
+            dates.append(i + 1)
+            remaining.append(max(remaining_amount, 0))
+        
+        # Grafik yaratish
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), facecolor='white')
+        
+        # Asosiy qarzning kamayishi
+        ax1.plot(dates, remaining, linewidth=2, color='#2E86AB')
+        ax1.fill_between(dates, 0, remaining, alpha=0.3, color='#2E86AB')
+        ax1.set_xlabel('Oy', fontsize=12)
+        ax1.set_ylabel('Qolgan qarz (so\'m)', fontsize=12)
+        ax1.set_title(f'Kredit qoldig\'i dinamikasi\n{months} oy, {rate}%', fontsize=14, fontweight='bold')
+        ax1.grid(True, alpha=0.3)
+        
+        # Oylik to'lov tarkibi
+        interest_part = payment * (rate / 100 / 12)
+        principal_part = payment - interest_part
+        ax2.bar(['Foiz', 'Asosiy qarz'], [interest_part, principal_part], color=['#E63946', '#2E86AB'])
+        ax2.set_ylabel('So\'m', fontsize=12)
+        ax2.set_title(f'Oylik to\'lov tarkibi\nJami: {payment:,.0f} so\'m', fontsize=14, fontweight='bold')
+        
+        plt.tight_layout()
+        
+        buf = BytesIO()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+        
+        return buf
+    except Exception as e:
+        logger.error(f"Grafik yaratishda xatolik: {e}")
+        return None
 
-def generate_comparison_table(banks_to_compare: list) -> str:
-    """Banklarni taqqoslash jadvalini yaratadi"""
-    comparison = "📊 *BANKLARNI TAQQOSLASH* 📊\n\n"
-    comparison += "┌─────────────────┬──────────────┬──────────────┬──────────────┐\n"
-    comparison += "│ Bank nomi       │ Kredit foizi │ Depozit foizi│ Maks. summa  │\n"
-    comparison += "├─────────────────┼──────────────┼──────────────┼──────────────┤\n"
-    
-    for bank_key in banks_to_compare:
-        if bank_key in BANKS:
-            bank = BANKS[bank_key]
-            name_short = bank['name'][:15]
-            credit = bank['credit_rate'][:12]
-            deposit = bank['deposit_rate'][:12]
-            max_amt = bank['max_amount'][:12]
-            comparison += f"│ {name_short:<15} │ {credit:<12} │ {deposit:<12} │ {max_amt:<12} │\n"
-    
-    comparison += "└─────────────────┴──────────────┴──────────────┴──────────────┘\n\n"
-    comparison += "ℹ️ *Eng past kredit foizi:* Hamkorbank (~22%)\n"
-    comparison += "ℹ️ *Eng qulay depozit:* Xalq Banki (~17-21%)\n"
-    comparison += "ℹ️ *Eng uzoq muddat:* Xalq Banki (84 oy)\n"
-    comparison += "ℹ️ *Eng katta summa:* Xalq Banki (500 mln so'm)\n"
-    
-    return comparison
+def get_main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Asosiy menyu tugmalarini qaytaradi"""
+    keyboard = [
+        [InlineKeyboardButton("🏦 BANKLAR", callback_data="show_banks")],
+        [InlineKeyboardButton("📊 TAQQOSLASH", callback_data="compare_banks")],
+        [InlineKeyboardButton("💰 KREDIT HISOBI", callback_data="calc_loan"),
+         InlineKeyboardButton("💵 DEPOZIT HISOBI", callback_data="calc_deposit")],
+        [InlineKeyboardButton("💱 VALYUTA KONVERTOR", callback_data="currency"),
+         InlineKeyboardButton("🤖 AI YORDAMCHI", callback_data="ai_assistant")],
+        [InlineKeyboardButton("ℹ️ BOT HAQIDA", callback_data="about")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 # ==================== HANDLERLAR ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/start komandasi - asosiy menyu"""
     user = update.effective_user
     username = user.first_name or user.username or "Do'stim"
-    
-    # Inline tugmalar
-    keyboard = [
-        [InlineKeyboardButton(MAIN_MENU_BUTTONS["banklar"], callback_data="show_banks")],
-        [InlineKeyboardButton(MAIN_MENU_BUTTONS["taqqoslash"], callback_data="compare_banks")],
-        [InlineKeyboardButton(MAIN_MENU_BUTTONS["kredit"], callback_data="calc_loan"),
-         InlineKeyboardButton(MAIN_MENU_BUTTONS["depozit"], callback_data="calc_deposit")],
-        [InlineKeyboardButton(MAIN_MENU_BUTTONS["valyuta"], callback_data="currency"),
-         InlineKeyboardButton(MAIN_MENU_BUTTONS["ai"], callback_data="ai_assistant")],
-        [InlineKeyboardButton(MAIN_MENU_BUTTONS["about"], callback_data="about")],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     
     welcome_text = f"""
 👋 *Assalomu aleykum, {username}!*
@@ -239,7 +256,11 @@ Quyidagi 6 ta bank bo'yicha xizmat ko'rsataman:
 
 👇 *Menyudan tanlang:*
 """
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(
+        welcome_text, 
+        reply_markup=get_main_menu_keyboard(),
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Tugmalar bosilganda ishlaydi"""
@@ -249,11 +270,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     data = query.data
     
     if data == "show_banks":
-        # Banklar ro'yxati
         keyboard = []
         for key, bank in BANKS.items():
-            keyboard.append([InlineKeyboardButton(f"{bank['color']} {bank['name']}", callback_data=f"bank_{key}")])
-        keyboard.append([InlineKeyboardButton("🔙 Orqaga", callback_data="back_to_main")])
+            keyboard.append([InlineKeyboardButton(
+                f"{bank['color']} {bank['name']}", 
+                callback_data=f"bank_{key}"
+            )])
+        keyboard.append([InlineKeyboardButton("🔙 Asosiy menyu", callback_data="back_to_main")])
         
         await query.edit_message_text(
             "🏦 *Banklar ro'yxati:*\n\nQuyidagi banklardan birini tanlang:", 
@@ -273,9 +296,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
     
     elif data == "compare_banks":
-        # Barcha banklarni taqqoslash
-        all_banks = list(BANKS.keys())
-        comparison = generate_comparison_table(all_banks)
+        comparison = "📊 *BANKLARNI TAQQOSLASH* 📊\n\n"
+        for key, bank in BANKS.items():
+            comparison += f"\n{bank['color']} *{bank['name']}*\n"
+            comparison += f"   💰 Kredit: {bank['credit_rate']}\n"
+            comparison += f"   📈 Depozit: {bank['deposit_rate']}\n"
+            comparison += f"   💵 Maksimal: {bank['max_amount']}\n"
+            comparison += f"   ⏱️ Muddati: {bank['loan_term']}\n"
+            comparison += "─" * 30 + "\n"
+        
         keyboard = [[InlineKeyboardButton("🔙 Asosiy menyu", callback_data="back_to_main")]]
         await query.edit_message_text(
             comparison,
@@ -284,89 +313,98 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
     
     elif data == "calc_loan":
-        context.user_data['calc_type'] = 'loan'
         await query.edit_message_text(
             "💰 *Kredit kalkulyatori* 💰\n\n"
-            "Iltimos, quyidagi ma'lumotlarni kiriting:\n"
-            "`Kredit summasi (so'mda)`\n"
+            "Iltimos, kredit summasini so'mda kiriting:\n"
             "Masalan: `25000000`\n\n"
-            "Keyin foiz stavkasi va muddatni so'rayman.",
+            "❌ Bekor qilish: /cancel",
             parse_mode=ParseMode.MARKDOWN
         )
-        context.user_data['step'] = 'loan_amount'
+        return LOAN_AMOUNT
     
     elif data == "calc_deposit":
-        context.user_data['calc_type'] = 'deposit'
         await query.edit_message_text(
             "💵 *Depozit kalkulyatori* 💵\n\n"
-            "Iltimos, depozit summasini kiriting (so'mda):\n"
-            "Masalan: `10000000`",
+            "Iltimos, depozit summasini so'mda kiriting:\n"
+            "Masalan: `10000000`\n\n"
+            "❌ Bekor qilish: /cancel",
             parse_mode=ParseMode.MARKDOWN
         )
-        context.user_data['step'] = 'deposit_amount'
+        return DEPOSIT_AMOUNT
     
     elif data == "currency":
-        # Valyuta konvertori
         keyboard = []
-        currencies = ["USD", "EUR", "RUB", "GBP", "CNY"]
-        for curr in currencies:
+        for curr in ["USD", "EUR", "RUB", "GBP", "CNY"]:
             keyboard.append([InlineKeyboardButton(f"{curr} → UZS", callback_data=f"curr_{curr}")])
-        keyboard.append([InlineKeyboardButton("🔄 Teskari konvertatsiya", callback_data="curr_reverse")])
+        keyboard.append([InlineKeyboardButton("🔄 UZS → Valyuta", callback_data="curr_reverse")])
         keyboard.append([InlineKeyboardButton("🔙 Asosiy menyu", callback_data="back_to_main")])
         
-        rates_text = "💱 *Valyuta kurslari (so'mga nisbatan):* 💱\n\n"
+        rates_text = "💱 *Valyuta kurslari:* 💱\n\n"
         for curr, rate in EXCHANGE_RATES.items():
-            rates_text += f"• 1 {curr} = {rate:,} so'm\n"
+            rates_text += f"• 1 {curr} = {rate:,.0f} so'm\n"
         
         await query.edit_message_text(
-            rates_text + "\n👇 Quyidagi valyutalardan birini tanlang:",
+            rates_text + "\n👇 Konvertatsiya turini tanlang:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode=ParseMode.MARKDOWN
         )
     
-    elif data.startswith("curr_"):
+    elif data.startswith("curr_") and data != "curr_reverse":
         currency = data.replace("curr_", "")
         context.user_data['currency_from'] = currency
-        context.user_data['conv_type'] = 'to_uzs'
         await query.edit_message_text(
             f"💱 {currency} → UZS konvertatsiyasi\n\n"
-            f"1 {currency} = {EXCHANGE_RATES[currency]:,} so'm\n\n"
+            f"1 {currency} = {EXCHANGE_RATES[currency]:,.0f} so'm\n\n"
             f"Qancha {currency} konvertatsiya qilmoqchisiz?\n"
-            f"Masalan: `100`",
+            f"Masalan: `100`\n\n"
+            f"❌ Bekor qilish: /cancel",
             parse_mode=ParseMode.MARKDOWN
         )
         context.user_data['step'] = 'currency_amount'
     
     elif data == "curr_reverse":
-        context.user_data['conv_type'] = 'from_uzs'
         await query.edit_message_text(
             "💱 UZS → Valyuta konvertatsiyasi\n\n"
             "Qancha so'm konvertatsiya qilmoqchisiz?\n"
-            "Masalan: `1000000`",
+            "Masalan: `1000000`\n\n"
+            "❌ Bekor qilish: /cancel",
             parse_mode=ParseMode.MARKDOWN
         )
         context.user_data['step'] = 'uzs_amount'
     
     elif data == "ai_assistant":
-        await query.edit_message_text(
-            "🤖 *AI Yordamchi* 🤖\n\n"
-            "Men sizga bank xizmatlari, kreditlar, iqtisodiy masalalar bo'yicha yordam beraman.\n\n"
-            "✍️ Savolingizni yozib yuboring!\n\n"
-            "Masalan:\n"
-            "- Qaysi bankda kredit olish qulay?\n"
-            "- Depozit qanday hisoblanadi?\n"
-            "- Ipoteka krediti shartlari qanday?\n\n"
-            "❌ Bekor qilish uchun /cancel ni yozing.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-        context.user_data['ai_mode'] = True
+        if ai_client:
+            await query.edit_message_text(
+                "🤖 *AI Yordamchi* 🤖\n\n"
+                "Men sizga bank xizmatlari, kreditlar, iqtisodiy masalalar bo'yicha yordam beraman.\n\n"
+                "✍️ *Savolingizni yozib yuboring!*\n\n"
+                "Masalan:\n"
+                "• Qaysi bankda kredit olish qulay?\n"
+                "• Depozit qanday hisoblanadi?\n"
+                "• Ipoteka krediti shartlari qanday?\n\n"
+                "❌ Bekor qilish: /cancel",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            context.user_data['ai_mode'] = True
+        else:
+            await query.edit_message_text(
+                "❌ *AI yordamchi hozircha ishlamayapti!*\n\n"
+                "Sabablari:\n"
+                "• API kaliti noto'g'ri\n"
+                "• Internet aloqasi yo'q\n"
+                "• HuggingFace serverida muammo\n\n"
+                "🔧 Tez orada ishga tushiriladi.\n\n"
+                "Shu vaqtda bank ma'lumotlaridan foydalaning: /start",
+                parse_mode=ParseMode.MARKDOWN
+            )
     
     elif data == "about":
         about_text = """
 ℹ️ *Mahalla Agenti Bot* ℹ️
 
-📌 *Versiya:* 1.0.0
-👨‍💻 *Yaratuvchi:* Mahalla Agentlik jamoasi
+📌 *Versiya:* 2.0.0
+👨‍💻 *Muallif:* Mahalla Agentlik jamoasi
+📅 *Oxirgi yangilanish:* 2026 yil
 
 ✨ *Funksiyalar:*
 • 6 ta bank bo'yicha batafsil ma'lumot
@@ -376,72 +414,116 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 • AI yordamchi (DeepSeek modeli)
 • Banklar taqqoslash
 
-📞 *Yordam:* @your_support_bot
+💡 *Maslahat:* Botdan to'liq foydalanish uchun /start ni bosing.
 
-🔄 *Bot yangilanishlari:* /start
+📞 *Yordam:* @mahalla_agenti_support
 """
         keyboard = [[InlineKeyboardButton("🔙 Asosiy menyu", callback_data="back_to_main")]]
-        await query.edit_message_text(about_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+        await query.edit_message_text(
+            about_text, 
+            reply_markup=InlineKeyboardMarkup(keyboard), 
+            parse_mode=ParseMode.MARKDOWN
+        )
     
     elif data == "back_to_main":
-        await start(update, context)
+        await query.edit_message_text(
+            "🏦 *Asosiy menyu* 🏦\n\nQuyidagi tugmalardan birini tanlang:",
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode=ParseMode.MARKDOWN
+        )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Foydalanuvchi xabarlarini qayta ishlaydi"""
     message = update.message
     user_text = message.text.strip()
     
-    # AI yordamchi rejimi
+    # ==================== AI YORDAMCHI ====================
     if context.user_data.get('ai_mode'):
         if user_text.lower() == '/cancel':
             context.user_data['ai_mode'] = False
-            await message.reply_text("🤖 AI yordamchi rejimi bekor qilindi. /start bilan asosiy menyuga qayting.")
+            await message.reply_text(
+                "🤖 AI yordamchi rejimi bekor qilindi.\n"
+                "🏦 Asosiy menyu uchun /start ni bosing."
+            )
             return
         
-        await message.reply_text("🤔 *O'ylayapman...*", parse_mode=ParseMode.MARKDOWN)
+        # "O'ylayapman..." xabarini yuborish
+        thinking_msg = await message.reply_text("🤔 *O'ylayapman...*", parse_mode=ParseMode.MARKDOWN)
         
         try:
-            # HuggingFace AI API orqali javob olish [citation:3][citation:8]
-            completion = ai_client.chat.completions.create(
-                model="deepseek-ai/DeepSeek-R1:novita",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "Siz O'zbekiston banklari, kreditlar, depozitlar va moliyaviy masalalar bo'yicha mutaxassis yordamchisiz. Faqat bank va moliyaviy savollarga javob bering. Iloji boricha foydali va qisqa javoblar bering."
-                    },
-                    {
-                        "role": "user",
-                        "content": user_text
-                    }
-                ],
-                max_tokens=500
-            )
-            response = completion.choices[0].message.content
-            await message.reply_text(f"🤖 *AI Yordamchi:*\n\n{response}", parse_mode=ParseMode.MARKDOWN)
+            # HuggingFace AI API orqali javob olish
+            if ai_client:
+                completion = ai_client.chat.completions.create(
+                    model="deepseek-ai/DeepSeek-R1:novita",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": """Siz O'zbekiston banklari, kreditlar, depozitlar va moliyaviy masalalar bo'yicha mutaxassis yordamchisiz. 
+                            Quyidagi banklar haqida ma'lumotingiz bor: Hamkorbank, Xalq Banki, TBC Bank, Turonbank, NBU, SQB.
+                            Faqat bank va moliyaviy savollarga javob bering. Iloji boricha foydali, qisqa va aniq javoblar bering.
+                            Agar savol banklarga tegishli bo'lmasa, faqat bank masalalari bo'yicha yordam bera olishingizni ayting."""
+                        },
+                        {
+                            "role": "user",
+                            "content": user_text
+                        }
+                    ],
+                    max_tokens=500
+                )
+                
+                response = completion.choices[0].message.content
+                
+                # Javobni formatlash
+                if response:
+                    await thinking_msg.edit_text(
+                        f"🤖 *AI Yordamchi:*\n\n{response}", 
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                else:
+                    await thinking_msg.edit_text(
+                        "❌ Kechirasiz, AI dan javob olishda muammo yuz berdi.\n\n"
+                        "Iltimos, savolingizni boshqacha usulda yozib ko'ring."
+                    )
+            else:
+                await thinking_msg.edit_text(
+                    "❌ *AI yordamchi ishlamayapti!*\n\n"
+                    "Sababi: API kaliti to'g'ri sozlanmagan.\n\n"
+                    "🔧 Muammoni hal qilish:\n"
+                    "1. .env fayliga HF_API_KEY qo'shing\n"
+                    "2. Yoki keyinroq urinib ko'ring\n\n"
+                    "🏦 Bank ma'lumotlari uchun /start ni bosing.",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                
         except Exception as e:
-            logger.error(f"AI error: {e}")
-            await message.reply_text(
-                "❌ Kechirasiz, AI xizmati vaqtinchalik ishlamayapti. Iltimos, keyinroq urinib ko'ring.\n\n"
-                "Shu vaqtda bank ma'lumotlarini /start orqali ko'rishingiz mumkin."
+            logger.error(f"AI xatolik: {e}")
+            await thinking_msg.edit_text(
+                f"❌ *AI xizmatida xatolik:*\n\n"
+                f"Xato: {str(e)[:100]}\n\n"
+                "Iltimos, keyinroq qayta urinib ko'ring yoki /start ni bosing.",
+                parse_mode=ParseMode.MARKDOWN
             )
+        
+        # AI rejimidan chiqish (faqat bitta so'rov uchun)
+        context.user_data['ai_mode'] = False
         return
     
-    # Kredit kalkulyatori
+    # ==================== KREDIT KALKULYATORI ====================
     if context.user_data.get('calc_type') == 'loan':
         step = context.user_data.get('step')
         
         if step == 'loan_amount':
             try:
-                amount = float(user_text.replace(' ', ''))
+                amount = float(user_text.replace(' ', '').replace(',', ''))
                 if amount <= 0:
                     raise ValueError
                 context.user_data['loan_amount'] = amount
                 context.user_data['step'] = 'loan_rate'
                 await message.reply_text(
                     f"💰 Kredit summasi: {amount:,.0f} so'm\n\n"
-                    f"Endi yillik foiz stavkasini kiriting (%):\n"
-                    f"Masalan: `24`\n\n"
-                    f"*Eslatma:* Banklarning stavkalari 22%-40% oralig'ida",
+                    f"📈 Endi yillik foiz stavkasini kiriting (%):\n"
+                    f"Masalan: `24` (banklar stavkalari 22-40% oralig'ida)\n\n"
+                    f"❌ Bekor qilish: /cancel",
                     parse_mode=ParseMode.MARKDOWN
                 )
             except ValueError:
@@ -449,16 +531,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         elif step == 'loan_rate':
             try:
-                rate = float(user_text.replace('%', ''))
+                rate = float(user_text.replace('%', '').replace(',', ''))
                 if rate <= 0 or rate > 60:
                     raise ValueError
                 context.user_data['loan_rate'] = rate
                 context.user_data['step'] = 'loan_term'
                 await message.reply_text(
                     f"📈 Yillik foiz stavkasi: {rate}%\n\n"
-                    f"Endi kredit muddatini oylarda kiriting:\n"
-                    f"Masalan: `12`, `24`, `36`, `60`\n\n"
-                    f"*Eslatma:* Maksimal muddat 84 oy",
+                    f"⏱️ Endi kredit muddatini oylarda kiriting:\n"
+                    f"Masalan: `12`, `24`, `36`, `60` (maksimal 84 oy)\n\n"
+                    f"❌ Bekor qilish: /cancel",
                     parse_mode=ParseMode.MARKDOWN
                 )
             except ValueError:
@@ -473,13 +555,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 amount = context.user_data['loan_amount']
                 rate = context.user_data['loan_rate']
                 
-                # Oylik to'lovni hisoblash (annuitet)
+                # Oylik to'lovni hisoblash
                 monthly_rate = rate / 100 / 12
                 payment = amount * (monthly_rate * (1 + monthly_rate) ** months) / ((1 + monthly_rate) ** months - 1)
                 total_payment = payment * months
                 total_interest = total_payment - amount
                 
-                # Kredit jadvali rasm sifatida
+                # Kredit jadvali
                 schedule_img = generate_loan_schedule(amount, rate, months)
                 
                 result_text = f"""
@@ -495,44 +577,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 • Jami to'lov: {total_payment:,.0f} so'm
 • Jami foiz: {total_interest:,.0f} so'm
 
-📈 *Tavsiya:*
-Eng past foizli banklar: Hamkorbank (~22%), Xalq Banki (~22-26%)
-Eng uzoq muddatli bank: Xalq Banki (84 oy)
+📈 *Tavsiya:* Eng past foizli banklar - Hamkorbank (~22%) va Xalq Banki (~22-26%)
 """
                 
-                await message.reply_photo(
-                    photo=schedule_img,
-                    caption=result_text,
+                if schedule_img:
+                    await message.reply_photo(
+                        photo=schedule_img,
+                        caption=result_text,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                else:
+                    await message.reply_text(result_text, parse_mode=ParseMode.MARKDOWN)
+                
+                # Tozalash
+                context.user_data.clear()
+                
+                # Asosiy menyu
+                await message.reply_text(
+                    "👇 *Asosiy menyu:*",
+                    reply_markup=get_main_menu_keyboard(),
                     parse_mode=ParseMode.MARKDOWN
                 )
-                
-                # Kalkulyatorni tozalash
-                context.user_data['calc_type'] = None
-                context.user_data['step'] = None
-                
-                # Asosiy menyuga qaytish tugmasi
-                keyboard = [[InlineKeyboardButton("🔙 Asosiy menyu", callback_data="back_to_main")]]
-                await message.reply_text("👇 Asosiy menyuga qaytish:", reply_markup=InlineKeyboardMarkup(keyboard))
                 
             except ValueError:
                 await message.reply_text("❌ Iltimos, to'g'ri muddat kiriting (1-120 oy oralig'ida). Masalan: `24`")
     
-    # Depozit kalkulyatori
+    # ==================== DEPOZIT KALKULYATORI ====================
     elif context.user_data.get('calc_type') == 'deposit':
         step = context.user_data.get('step')
         
         if step == 'deposit_amount':
             try:
-                amount = float(user_text.replace(' ', ''))
+                amount = float(user_text.replace(' ', '').replace(',', ''))
                 if amount <= 0:
                     raise ValueError
                 context.user_data['deposit_amount'] = amount
                 context.user_data['step'] = 'deposit_rate'
                 await message.reply_text(
                     f"💵 Depozit summasi: {amount:,.0f} so'm\n\n"
-                    f"Endi yillik foiz stavkasini kiriting (%):\n"
-                    f"Masalan: `18`\n\n"
-                    f"*Eslatma:* Depozit stavkalari 17%-23% oralig'ida",
+                    f"📈 Endi yillik foiz stavkasini kiriting (%):\n"
+                    f"Masalan: `18` (banklar stavkalari 17-23% oralig'ida)\n\n"
+                    f"❌ Bekor qilish: /cancel",
                     parse_mode=ParseMode.MARKDOWN
                 )
             except ValueError:
@@ -540,15 +625,16 @@ Eng uzoq muddatli bank: Xalq Banki (84 oy)
         
         elif step == 'deposit_rate':
             try:
-                rate = float(user_text.replace('%', ''))
+                rate = float(user_text.replace('%', '').replace(',', ''))
                 if rate <= 0 or rate > 30:
                     raise ValueError
                 context.user_data['deposit_rate'] = rate
                 context.user_data['step'] = 'deposit_term'
                 await message.reply_text(
                     f"📈 Yillik foiz stavkasi: {rate}%\n\n"
-                    f"Endi depozit muddatini oylarda kiriting:\n"
-                    f"Masalan: `6`, `12`, `24`",
+                    f"⏱️ Endi depozit muddatini oylarda kiriting:\n"
+                    f"Masalan: `6`, `12`, `24` (maksimal 60 oy)\n\n"
+                    f"❌ Bekor qilish: /cancel",
                     parse_mode=ParseMode.MARKDOWN
                 )
             except ValueError:
@@ -563,7 +649,7 @@ Eng uzoq muddatli bank: Xalq Banki (84 oy)
                 amount = context.user_data['deposit_amount']
                 rate = context.user_data['deposit_rate']
                 
-                # Depozit bo'yicha foiz hisoblash
+                # Depozit hisobi
                 total_interest = amount * (rate / 100) * (months / 12)
                 total_amount = amount + total_interest
                 
@@ -588,19 +674,22 @@ Eng uzoq muddatli bank: Xalq Banki (84 oy)
                 await message.reply_text(result_text, parse_mode=ParseMode.MARKDOWN)
                 
                 # Tozalash
-                context.user_data['calc_type'] = None
-                context.user_data['step'] = None
+                context.user_data.clear()
                 
-                keyboard = [[InlineKeyboardButton("🔙 Asosiy menyu", callback_data="back_to_main")]]
-                await message.reply_text("👇 Asosiy menyuga qaytish:", reply_markup=InlineKeyboardMarkup(keyboard))
+                # Asosiy menyu
+                await message.reply_text(
+                    "👇 *Asosiy menyu:*",
+                    reply_markup=get_main_menu_keyboard(),
+                    parse_mode=ParseMode.MARKDOWN
+                )
                 
             except ValueError:
                 await message.reply_text("❌ Iltimos, to'g'ri muddat kiriting (1-60 oy oralig'ida).")
     
-    # Valyuta konvertori
+    # ==================== VALYUTA KONVERTORI ====================
     elif context.user_data.get('step') == 'currency_amount':
         try:
-            amount = float(user_text.replace(' ', ''))
+            amount = float(user_text.replace(' ', '').replace(',', ''))
             if amount <= 0:
                 raise ValueError
             
@@ -612,26 +701,28 @@ Eng uzoq muddatli bank: Xalq Banki (84 oy)
 
 {amount:,.2f} {currency} = {converted:,.0f} so'm
 
-📊 *Kurs:* 1 {currency} = {EXCHANGE_RATES[currency]:,} so'm
+📊 *Kurs:* 1 {currency} = {EXCHANGE_RATES[currency]:,.0f} so'm
 
 💡 *Maslahat:* Boshqa konvertatsiya uchun /start ni bosing.
 """
             await message.reply_text(result_text, parse_mode=ParseMode.MARKDOWN)
             
-            context.user_data['step'] = None
-            keyboard = [[InlineKeyboardButton("🔙 Asosiy menyu", callback_data="back_to_main")]]
-            await message.reply_text("👇 Asosiy menyuga qaytish:", reply_markup=InlineKeyboardMarkup(keyboard))
+            context.user_data.clear()
+            await message.reply_text(
+                "👇 *Asosiy menyu:*",
+                reply_markup=get_main_menu_keyboard(),
+                parse_mode=ParseMode.MARKDOWN
+            )
             
         except ValueError:
-            await message.reply_text("❌ Iltimos, to'g'ri miqdor kiriting (faqat raqamlar).")
+            await message.reply_text("❌ Iltimos, to'g'ri miqdor kiriting (faqat raqamlar). Masalan: `100`")
     
     elif context.user_data.get('step') == 'uzs_amount':
         try:
-            amount = float(user_text.replace(' ', ''))
+            amount = float(user_text.replace(' ', '').replace(',', ''))
             if amount <= 0:
                 raise ValueError
             
-            # Eng yaqin valyutani taklif qilish
             results = []
             for curr, rate in EXCHANGE_RATES.items():
                 converted = amount / rate
@@ -650,42 +741,87 @@ Eng uzoq muddatli bank: Xalq Banki (84 oy)
 """
             await message.reply_text(result_text, parse_mode=ParseMode.MARKDOWN)
             
-            context.user_data['step'] = None
-            keyboard = [[InlineKeyboardButton("🔙 Asosiy menyu", callback_data="back_to_main")]]
-            await message.reply_text("👇 Asosiy menyuga qaytish:", reply_markup=InlineKeyboardMarkup(keyboard))
+            context.user_data.clear()
+            await message.reply_text(
+                "👇 *Asosiy menyu:*",
+                reply_markup=get_main_menu_keyboard(),
+                parse_mode=ParseMode.MARKDOWN
+            )
             
         except ValueError:
-            await message.reply_text("❌ Iltimos, to'g'ri miqdor kiriting (faqat raqamlar).")
+            await message.reply_text("❌ Iltimos, to'g'ri miqdor kiriting (faqat raqamlar). Masalan: `1000000`")
     
     else:
-        # Hech qanday rejimda emas
         await message.reply_text(
-            "❓ Tushunarsiz buyruq.\n\n"
-            "Yordam uchun /start ni bosing yoki quyidagi buyruqlardan foydalaning:\n"
+            "❓ *Tushunarsiz buyruq* ❓\n\n"
+            "Yordam uchun quyidagi buyruqlardan foydalaning:\n"
             "• /start - Asosiy menyu\n"
-            "• /cancel - Joriy amalni bekor qilish"
+            "• /cancel - Joriy amalni bekor qilish\n\n"
+            "👇 Asosiy menyu:",
+            reply_markup=get_main_menu_keyboard(),
+            parse_mode=ParseMode.MARKDOWN
         )
+
+async def loan_conversation_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Kredit hisoblashni boshlash"""
+    query = update.callback_query
+    await query.answer()
+    context.user_data['calc_type'] = 'loan'
+    context.user_data['step'] = 'loan_amount'
+    await query.edit_message_text(
+        "💰 *Kredit kalkulyatori* 💰\n\n"
+        "Iltimos, kredit summasini so'mda kiriting:\n"
+        "Masalan: `25000000`\n\n"
+        "❌ Bekor qilish: /cancel",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def deposit_conversation_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Depozit hisoblashni boshlash"""
+    query = update.callback_query
+    await query.answer()
+    context.user_data['calc_type'] = 'deposit'
+    context.user_data['step'] = 'deposit_amount'
+    await query.edit_message_text(
+        "💵 *Depozit kalkulyatori* 💵\n\n"
+        "Iltimos, depozit summasini so'mda kiriting:\n"
+        "Masalan: `10000000`\n\n"
+        "❌ Bekor qilish: /cancel",
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/cancel komandasi - joriy amalni bekor qilish"""
     context.user_data.clear()
     await update.message.reply_text(
-        "✅ Joriy amal bekor qilindi.\n"
-        "Yangi buyruq uchun /start ni bosing."
+        "✅ *Joriy amal bekor qilindi!* ✅\n\n"
+        "Yangi buyruq uchun /start ni bosing.\n\n"
+        "👇 Asosiy menyu:",
+        reply_markup=get_main_menu_keyboard(),
+        parse_mode=ParseMode.MARKDOWN
     )
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Xatoliklarni qayta ishlash"""
-    logger.error(f"Update {update} caused error {context.error}")
+    logger.error(f"Xatolik yuz berdi: {context.error}")
+    
+    error_message = "❌ *Kechirasiz, texnik xatolik yuz berdi!* ❌\n\n"
+    
     if update and update.effective_message:
         await update.effective_message.reply_text(
-            "❌ Kechirasiz, texnik xatolik yuz berdi. Iltimos, keyinroq qayta urinib ko'ring.\n"
-            "Agar muammo takrorlansa, /start ni bosing."
+            error_message + "Iltimos, keyinroq qayta urinib ko'ring yoki /start ni bosing.",
+            parse_mode=ParseMode.MARKDOWN
         )
 
 # ==================== ASOSIY FUNKSIYA ====================
 def main() -> None:
     """Botni ishga tushirish"""
+    print("=" * 50)
+    print("🚀 Mahalla Agenti Bot ishga tushmoqda...")
+    print(f"🔑 BOT_TOKEN: {'✅ Mavjud' if TOKEN else '❌ Topilmadi'}")
+    print(f"🤖 AI Client: {'✅ Ishga tushdi' if ai_client else '❌ Ishlamayapti'}")
+    print("=" * 50)
+    
     # Application yaratish
     application = Application.builder().token(TOKEN).build()
     
@@ -697,7 +833,8 @@ def main() -> None:
     application.add_error_handler(error_handler)
     
     # Botni ishga tushirish
-    print("🤖 Mahalla Agenti Bot ishga tushdi...")
+    print("✅ Bot muvaffaqiyatli ishga tushdi!")
+    print("🏃 Bot ishlayapti...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
