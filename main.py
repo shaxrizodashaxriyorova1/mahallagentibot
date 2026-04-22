@@ -15,18 +15,8 @@ from huggingface_hub import InferenceClient
 
 TOKEN = os.getenv("BOT_TOKEN")
 HF_API_KEY = os.getenv("HF_API_KEY")
-
-# HuggingFace AI client - provider alohida ko'rsatiladi
-# Novita provider orqali DeepSeek-R1 ishlatiladi
-ai_client = InferenceClient(
-    provider="novita",
-    api_key=HF_API_KEY,
-)
-# Fallback client (HF default provider)
-ai_client_fallback = InferenceClient(
-    provider="hf-inference",
-    api_key=HF_API_KEY,
-)
+# HuggingFace AI client
+ai_client = InferenceClient(api_key=HF_API_KEY)
 
 # Logging sozlamalari
 logging.basicConfig(
@@ -411,64 +401,64 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await message.reply_text("🤔 *O'ylayapman...*", parse_mode=ParseMode.MARKDOWN)
         
         try:
-            # 1-usul: Novita provider orqali DeepSeek-R1 (asosiy)
-            system_msg = (
-                "Siz O'zbekiston banklari, kreditlar, depozitlar va moliyaviy "
-                "masalalar bo'yicha mutaxassis yordamchisiz. Javoblaringizni "
-                "o'zbek tilida bering. Faqat bank va moliyaviy savollarga javob "
-                "bering. Iloji boricha foydali va qisqa javoblar bering."
-            )
-            messages = [
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_text}
+            # HuggingFace AI API orqali javob olish (Eski huggingface_hub versiyalari uchun mos)
+            # Eng ishonchli va doim ishlaydigan modellar ro'yxati:
+            AI_MODELS = [
+                "Qwen/Qwen2.5-72B-Instruct",
+                "microsoft/Phi-3.5-mini-instruct",
+                "meta-llama/Llama-3.2-3B-Instruct",
+                "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
             ]
             
             response = None
+            last_error = None
             
-            # Birinchi: Novita provider + DeepSeek-R1
-            try:
-                completion = ai_client.chat.completions.create(
-                    model="deepseek-ai/DeepSeek-R1",
-                    messages=messages,
-                    max_tokens=500
-                )
-                response = completion.choices[0].message.content
-                logger.info("DeepSeek-R1 (novita) muvaffaqiyatli ishladi")
-            except Exception as e1:
-                logger.warning(f"Novita/DeepSeek ishlamadi: {e1}")
-                
-                # Ikkinchi: HF Inference provider + Qwen
+            for model_name in AI_MODELS:
                 try:
-                    completion = ai_client_fallback.chat.completions.create(
-                        model="Qwen/Qwen2.5-72B-Instruct",
-                        messages=messages,
+                    completion = ai_client.chat.completions.create(
+                        model=model_name,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": (
+                                    "Siz O'zbekiston banklari, kreditlar, depozitlar va moliyaviy "
+                                    "masalalar bo'yicha mutaxassis yordamchisiz. Javoblaringizni "
+                                    "o'zbek tilida bering. Faqat bank va moliyaviy savollarga javob "
+                                    "bering. Iloji boricha foydali va qisqa javoblar bering."
+                                )
+                            },
+                            {
+                                "role": "user",
+                                "content": user_text
+                            }
+                        ],
                         max_tokens=500
                     )
                     response = completion.choices[0].message.content
-                    logger.info("Qwen2.5 (hf-inference) muvaffaqiyatli ishladi")
-                except Exception as e2:
-                    logger.warning(f"HF-Inference/Qwen ishlamadi: {e2}")
-                    raise Exception(
-                        f"AI modellar ishlamadi.\n"
-                        f"Novita: {str(e1)[:100]}\n"
-                        f"HF: {str(e2)[:100]}"
-                    )
+                    # <think>...</think> teglarini olib tashlash (DeepSeek/ba'zi modellar uchun)
+                    if "<think>" in response:
+                        import re
+                        response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+                    break  # Muvaffaqiyatli bo'lsa, to'xtash
+                except Exception as model_err:
+                    last_error = model_err
+                    logger.warning(f"Model {model_name} ishlamadi: {model_err}")
+                    continue
             
             if response:
-                # <think>...</think> teglarini olib tashlash
-                import re
-                response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
-                # Telegram uchun xavfsiz formatlash
+                # Javobni Telegram uchun xavfsiz qilish
                 response = response.replace("*", "").replace("_", "").replace("`", "")
                 if len(response) > 3500:
                     response = response[:3500] + "..."
                 await message.reply_text(f"🤖 AI Yordamchi:\n\n{response}")
+            else:
+                raise Exception(f"Barcha modellar ishlamadi. Oxirgi xato: {last_error}")
                 
         except Exception as e:
             logger.error(f"AI error: {e}")
             await message.reply_text(
                 "❌ AI xizmatida xatolik:\n\n"
-                f"Xato: {str(e)[:300]}\n\n"
+                f"Xato: {str(e)[:200]}\n\n"
                 "💡 Iltimos, keyinroq qayta urinib ko'ring."
             )
         return
@@ -746,6 +736,5 @@ def main() -> None:
     # Botni ishga tushirish
     print("🤖 Mahalla Agenti Bot ishga tushdi...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-
-if __name__ == "__main__":
-    main()
+    if __name__ == "__main__":
+        main()
