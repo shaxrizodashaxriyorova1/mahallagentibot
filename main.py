@@ -736,5 +736,5 @@ def main() -> None:
     # Botni ishga tushirish
     print("🤖 Mahalla Agenti Bot ishga tushdi...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-    if __name__ == "__main__":
-        main()
+if __name__ == "__main__":
+    main()
